@@ -165,15 +165,23 @@ const io = new Server(httpServer, {
   cors: { origin: "*" },
 });
 
-// Server Setup
-async function startServer() {
-  const PORT = 3000;
+app.use(express.json());
 
-  // Initialize DB and Seed Bots
-  await db.init(MONGODB_URI);
-  await seedChatbots();
-
-  app.use(express.json());
+// Lazy initialization middleware for Vercel Serverless environment
+let dbInitialized = false;
+app.use(async (req, res, next) => {
+  if (!dbInitialized) {
+    try {
+      if (process.env.VERCEL === "1") console.log("[Vercel Serverless] Lazy initializing database connections...");
+      await db.init(MONGODB_URI);
+      await seedChatbots();
+      dbInitialized = true;
+    } catch (e) {
+      console.error("[Vercel Serverless] Lazy database initialization failed:", e);
+    }
+  }
+  next();
+});
 
   // --- API Routes ---
 
@@ -590,14 +598,20 @@ async function startServer() {
     return defaults[idx];
   }
 
-  // --- Vite Integration ---
-  if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "production") {
+  // --- Local Dev & Prod Build Integration ---
+async function startLocalServer() {
+  // Initialize DB locally right away
+  await db.init(MONGODB_URI);
+  await seedChatbots();
+  dbInitialized = true;
+
+  if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else if (process.env.VERCEL !== "1") {
+  } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -605,31 +619,14 @@ async function startServer() {
     });
   }
 
-  if (process.env.VERCEL !== "1") {
-    httpServer.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
-  }
+  const PORT = process.env.PORT || 3000;
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
 }
 
-// Lazy initialization middleware for Vercel Serverless environment
-let dbInitialized = false;
-app.use(async (req, res, next) => {
-  if (!dbInitialized) {
-    try {
-      console.log("[Vercel Serverless] Lazy initializing database connections...");
-      await db.init(MONGODB_URI);
-      await seedChatbots();
-      dbInitialized = true;
-    } catch (e) {
-      console.error("[Vercel Serverless] Lazy database initialization failed:", e);
-    }
-  }
-  next();
-});
-
 if (process.env.VERCEL !== "1") {
-  startServer().catch(console.error);
+  startLocalServer().catch(console.error);
 }
 
 export default app;
