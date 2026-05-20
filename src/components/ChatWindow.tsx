@@ -47,13 +47,23 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
   useEffect(() => {
     if (!activeChat || !token) return;
 
-    // Fetch message history
-    fetch(`/api/messages/${activeChat.id}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    .then(res => res.json())
-    .then(setMessages)
-    .catch(console.error);
+    const fetchMessages = () => {
+      fetch(`/api/messages/${activeChat.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(res => res.json())
+      .then(setMessages)
+      .catch(console.error);
+    };
+
+    fetchMessages();
+
+    // Polling fallback in case WebSockets are unavailable (e.g. Vercel serverless)
+    const pollInterval = setInterval(() => {
+      if (!socket || !socket.connected) {
+        fetchMessages();
+      }
+    }, 3000);
 
     // Listen for socket events
     if (socket) {
@@ -101,6 +111,7 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
       socket.on('typing_status', handleTyping);
       
       return () => {
+        clearInterval(pollInterval);
         socket.off('receive_message', handleReceive);
         socket.off('message_sent', handleReceive);
         socket.off('message_edited', handleEdit);
@@ -109,6 +120,10 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
         socket.off('typing_status', handleTyping);
       };
     }
+
+    return () => {
+      clearInterval(pollInterval);
+    };
   }, [activeChat, token, socket]);
 
   // Click outside to close dropdowns
@@ -133,7 +148,7 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
   // Handle typing input and trigger "typing..." socket events
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
-    if (!socket || !activeChat) return;
+    if (!socket || !activeChat || !socket.connected) return;
 
     socket.emit('typing_status', { receiverId: activeChat.id, isTyping: true });
 
@@ -150,23 +165,43 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
     if (!inputValue.trim() || !activeChat || !socket) return;
 
     // Emit stop typing
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    socket.emit('typing_status', { receiverId: activeChat.id, isTyping: false });
+    if (socket?.connected) {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      socket.emit('typing_status', { receiverId: activeChat.id, isTyping: false });
+    }
+
+    const token = localStorage.getItem('token');
 
     if (activeEditTarget) {
       // Edit Mode
-      socket.emit('edit_message', {
-        messageId: activeEditTarget.id,
-        newContent: inputValue
-      });
+      if (socket?.connected) {
+        socket.emit('edit_message', {
+          messageId: activeEditTarget.id,
+          newContent: inputValue
+        });
+      } else {
+        fetch(`/api/messages/${activeEditTarget.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ newContent: inputValue })
+        });
+      }
       setActiveEditTarget(null);
     } else {
       // Normal / Reply Mode
-      socket.emit('send_message', {
-        receiverId: activeChat.id,
-        content: inputValue,
-        replyToId: activeReplyTarget?.id
-      });
+      if (socket?.connected) {
+        socket.emit('send_message', {
+          receiverId: activeChat.id,
+          content: inputValue,
+          replyToId: activeReplyTarget?.id
+        });
+      } else {
+        fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ receiverId: activeChat.id, content: inputValue, replyToId: activeReplyTarget?.id })
+        });
+      }
       setActiveReplyTarget(null);
     }
 
@@ -175,15 +210,30 @@ export default function ChatWindow({ activeChat }: ChatWindowProps) {
 
   // Delete message
   const handleDeleteMessage = (messageId: string) => {
-    if (!socket) return;
-    socket.emit('delete_message', { messageId });
+    if (socket?.connected) {
+      socket.emit('delete_message', { messageId });
+    } else {
+      const token = localStorage.getItem('token');
+      fetch(`/api/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    }
     setActiveDropdownId(null);
   };
 
   // React to message
   const handleReactMessage = (messageId: string, emoji: string) => {
-    if (!socket) return;
-    socket.emit('react_message', { messageId, emoji });
+    if (socket?.connected) {
+      socket.emit('react_message', { messageId, emoji });
+    } else {
+      const token = localStorage.getItem('token');
+      fetch(`/api/messages/${messageId}/react`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ emoji })
+      });
+    }
     setActiveReactionPickerId(null);
     setActiveDropdownId(null);
   };

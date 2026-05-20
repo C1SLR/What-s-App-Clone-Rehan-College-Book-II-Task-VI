@@ -30,6 +30,13 @@ export default function Sidebar({ onSelectChat, activeChatId }: SidebarProps) {
   useEffect(() => {
     fetchContacts();
 
+    // Polling fallback in case WebSockets are unavailable (e.g. Vercel serverless)
+    const pollInterval = setInterval(() => {
+      if (!socket || !socket.connected) {
+        fetchContacts();
+      }
+    }, 4000);
+
     // Listen for new messages to update the last message preview
     if (socket) {
       const handleMessageUpdate = () => {
@@ -41,12 +48,17 @@ export default function Sidebar({ onSelectChat, activeChatId }: SidebarProps) {
       socket.on('message_deleted', handleMessageUpdate);
       
       return () => {
+        clearInterval(pollInterval);
         socket.off('receive_message', handleMessageUpdate);
         socket.off('message_sent', handleMessageUpdate);
         socket.off('message_edited', handleMessageUpdate);
         socket.off('message_deleted', handleMessageUpdate);
       };
     }
+
+    return () => {
+      clearInterval(pollInterval);
+    };
   }, [token, socket]);
 
   // Listen for Typing Status

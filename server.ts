@@ -159,14 +159,14 @@ async function seedChatbots() {
   }
 }
 
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: "*" },
+});
+
 // Server Setup
 async function startServer() {
-  const app = express();
-  const httpServer = createServer(app);
-  const io = new Server(httpServer, {
-    cors: { origin: "*" },
-  });
-
   const PORT = 3000;
 
   // Initialize DB and Seed Bots
@@ -267,6 +267,119 @@ async function startServer() {
       res.json(chatMessages);
     } catch (e) {
       res.status(401).send();
+    }
+  });
+
+  // REST API fallbacks for message operations (vital for Serverless environments like Vercel)
+
+  // Send Message
+  app.post("/api/messages", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).send();
+    try {
+      const token = authHeader.split(" ")[1];
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+      const senderId = decoded.userId;
+      
+      const { receiverId, content, replyToId } = req.body;
+      const senderUser = await db.findUserById(senderId);
+      if (!senderUser) return res.status(404).json({ error: "User not found" });
+
+      const message = await db.saveMessage({
+        senderId,
+        receiverId,
+        content,
+        replyToId
+      });
+
+      // Attempt to broadcast via socket if available
+      io.to(receiverId).emit("receive_message", message);
+      io.to(senderId).emit("message_sent", message);
+
+      const botConfig = BOTS.find(b => b.id === receiverId);
+      if (botConfig) {
+        handleBotReply(botConfig, senderId, content, null);
+      }
+
+      res.json(message);
+    } catch (e) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Edit Message
+  app.put("/api/messages/:messageId", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).send();
+    try {
+      const token = authHeader.split(" ")[1];
+      jwt.verify(token, JWT_SECRET) as { userId: string };
+      
+      const { messageId } = req.params;
+      const { newContent } = req.body;
+      const updated = await db.editMessage(messageId, newContent);
+      
+      if (updated) {
+        io.to(updated.senderId).emit("message_edited", updated);
+        io.to(updated.receiverId).emit("message_edited", updated);
+        res.json(updated);
+      } else {
+        res.status(404).json({ error: "Message not found" });
+      }
+    } catch (e) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Delete Message
+  app.delete("/api/messages/:messageId", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).send();
+    try {
+      const token = authHeader.split(" ")[1];
+      jwt.verify(token, JWT_SECRET) as { userId: string };
+      
+      const { messageId } = req.params;
+      const updated = await db.deleteMessage(messageId);
+      
+      if (updated) {
+        io.to(updated.senderId).emit("message_deleted", updated);
+        io.to(updated.receiverId).emit("message_deleted", updated);
+        res.json(updated);
+      } else {
+        res.status(404).json({ error: "Message not found" });
+      }
+    } catch (e) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // React to Message
+  app.post("/api/messages/:messageId/react", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).send();
+    try {
+      const token = authHeader.split(" ")[1];
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+      const senderId = decoded.userId;
+      
+      const { messageId } = req.params;
+      const { emoji } = req.body;
+      
+      const senderUser = await db.findUserById(senderId);
+      if (!senderUser) return res.status(404).json({ error: "User not found" });
+
+      const updated = await db.addOrRemoveReaction(messageId, senderId, senderUser.username, emoji);
+      
+      if (updated) {
+        io.to(updated.senderId).emit("message_reacted", updated);
+        io.to(updated.receiverId).emit("message_reacted", updated);
+        res.json(updated);
+      } else {
+        res.status(404).json({ error: "Message not found" });
+      }
+    } catch (e) {
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -374,7 +487,11 @@ async function startServer() {
   async function handleBotReply(bot: BotConfig, userId: string, userMessageContent: string, userSocket: any) {
     // 1. Send "typing..." status to the user
     setTimeout(() => {
-      userSocket.emit("typing_status", { senderId: bot.id, isTyping: true });
+      if (userSocket) {
+        userSocket.emit("typing_status", { senderId: bot.id, isTyping: true });
+      } else {
+        io.to(userId).emit("typing_status", { senderId: bot.id, isTyping: true });
+      }
     }, 300);
 
     try {
@@ -424,15 +541,27 @@ async function startServer() {
         });
 
         // Turn off bot typing indicator
-        userSocket.emit("typing_status", { senderId: bot.id, isTyping: false });
+        if (userSocket) {
+          userSocket.emit("typing_status", { senderId: bot.id, isTyping: false });
+        } else {
+          io.to(userId).emit("typing_status", { senderId: bot.id, isTyping: false });
+        }
 
         // Emit the chatbot's reply message
-        userSocket.emit("receive_message", savedBotMessage);
+        if (userSocket) {
+          userSocket.emit("receive_message", savedBotMessage);
+        } else {
+          io.to(userId).emit("receive_message", savedBotMessage);
+        }
       }, delay);
 
     } catch (e) {
       console.error("[Bot Reply] Error generating bot reply:", e);
-      userSocket.emit("typing_status", { senderId: bot.id, isTyping: false });
+      if (userSocket) {
+        userSocket.emit("typing_status", { senderId: bot.id, isTyping: false });
+      } else {
+        io.to(userId).emit("typing_status", { senderId: bot.id, isTyping: false });
+      }
     }
   }
 
@@ -462,13 +591,13 @@ async function startServer() {
   }
 
   // --- Vite Integration ---
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (process.env.VERCEL !== "1") {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -476,9 +605,31 @@ async function startServer() {
     });
   }
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (process.env.VERCEL !== "1") {
+    httpServer.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
-startServer().catch(console.error);
+// Lazy initialization middleware for Vercel Serverless environment
+let dbInitialized = false;
+app.use(async (req, res, next) => {
+  if (!dbInitialized) {
+    try {
+      console.log("[Vercel Serverless] Lazy initializing database connections...");
+      await db.init(MONGODB_URI);
+      await seedChatbots();
+      dbInitialized = true;
+    } catch (e) {
+      console.error("[Vercel Serverless] Lazy database initialization failed:", e);
+    }
+  }
+  next();
+});
+
+if (process.env.VERCEL !== "1") {
+  startServer().catch(console.error);
+}
+
+export default app;
