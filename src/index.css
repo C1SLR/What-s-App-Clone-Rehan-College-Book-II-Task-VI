@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-wa-bg-dark: #111b21;
+  --color-wa-header-dark: #202c33;
+  --color-wa-chat-bg: #0b141a;
+  --color-wa-primary: #00a884;
+  --color-wa-sent: #005c4b;
+  --color-wa-received: #202c33;
+  --color-wa-text: #e9edef;
+  --color-wa-secondary-text: #8696a0;
+  --color-wa-border: #2f3b43;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #0b141a;
+  color: #e9edef;
+}
+
+/* Custom Scrollbar for the app */
+::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
