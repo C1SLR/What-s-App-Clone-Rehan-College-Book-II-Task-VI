@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { GoogleGenAI } from "@google/genai";
-import { DatabaseService } from "./db";
+import { DatabaseService } from "./db.js";
 
 dotenv.config();
 
@@ -619,7 +619,7 @@ async function startLocalServer() {
     });
   }
 
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
