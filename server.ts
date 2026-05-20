@@ -169,15 +169,15 @@ app.use(express.json());
 
 // Lazy initialization middleware for Vercel Serverless environment
 let dbInitialized = false;
-app.use(async (req, res, next) => {
+app.use(async (req: any, res: any, next: any) => {
   if (!dbInitialized) {
     try {
-      if (process.env.VERCEL === "1") console.log("[Vercel Serverless] Lazy initializing database connections...");
       await db.init(MONGODB_URI);
       await seedChatbots();
       dbInitialized = true;
     } catch (e) {
-      console.error("[Vercel Serverless] Lazy database initialization failed:", e);
+      console.error("[Serverless] Database initialization failed:", e);
+      return res.status(500).json({ error: "Database initialization failed" });
     }
   }
   next();

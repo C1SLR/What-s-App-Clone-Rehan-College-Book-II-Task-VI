@@ -26,7 +26,9 @@ export interface DatabaseMessage {
   reactions?: { userId: string; username: string; emoji: string }[];
 }
 
-const JSON_DB_PATH = path.join(process.cwd(), "node_modules", "database.json");
+const JSON_DB_PATH = process.env.VERCEL === "1"
+  ? "/tmp/database.json"
+  : path.join(process.cwd(), "node_modules", "database.json");
 
 // Local File Database State
 class JSONDatabase {
